@@ -1,0 +1,51 @@
+package com.datawarehouse.datawarehouse.ingestion;
+
+import com.datawarehouse.datawarehouse.ingestion.extractor.MarketDataExtractor;
+import com.datawarehouse.datawarehouse.ingestion.loader.MarketDataLoader;
+import com.datawarehouse.datawarehouse.ingestion.model.CanonicalMarketData;
+import com.datawarehouse.datawarehouse.ingestion.model.IngestionResult;
+import com.datawarehouse.datawarehouse.ingestion.model.RawMarketDataPage;
+import com.datawarehouse.datawarehouse.ingestion.transformer.MarketDataTransformer;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+@Service
+@RequiredArgsConstructor
+public class MarketDataIngestionService {
+
+    private final MarketDataExtractor extractor;
+    private final MarketDataTransformer transformer;
+    private final MarketDataLoader loader;
+
+    public IngestionResult ingest(String assetIdentifier) {
+        IngestionResult totalResult = new IngestionResult(0, 0, 0, 0, 0);
+
+        RawMarketDataPage currentPage = extractor.fetchFirstPage(assetIdentifier);
+
+        while (currentPage != null) {
+            int fetchedCount = currentPage.getRecords() != null ? currentPage.getRecords().size() : 0;
+            totalResult.setFetchedRecords(totalResult.getFetchedRecords() + fetchedCount);
+
+            CanonicalMarketData canonicalMarketData = transformer.transform(assetIdentifier, currentPage);
+
+            int transformedCount = canonicalMarketData.getTimeSeriesRecords() != null
+                    ? canonicalMarketData.getTimeSeriesRecords().size()
+                    : 0;
+            totalResult.setTransformedRecords(totalResult.getTransformedRecords() + transformedCount);
+
+            IngestionResult pageResult = loader.load(canonicalMarketData);
+
+            totalResult.setStoredRecords(totalResult.getStoredRecords() + pageResult.getStoredRecords());
+            totalResult.setSkippedRecords(totalResult.getSkippedRecords() + pageResult.getSkippedRecords());
+            totalResult.setFailedRecords(totalResult.getFailedRecords() + pageResult.getFailedRecords());
+
+            if (!currentPage.isHasNextPage()) {
+                break;
+            }
+
+            currentPage = extractor.fetchNextPage(assetIdentifier, currentPage.getNextCursor());
+        }
+
+        return totalResult;
+    }
+}
