@@ -13,4 +13,6 @@ public class IngestionResult {
     private int storedRecords; // how many objects were sasved in the warehouse
     private int skippedRecords; // how many were intentionally ignored
     private int failedRecords;//how many failed because of bad data or runtime errors
+    private String message;
+
 }

@@ -15,8 +15,8 @@ public class StubMarketDataExtractor implements MarketDataExtractor {
     @Override
     public RawMarketDataPage fetchFirstPage(String assetIdentifier) {
         Map<String, Object> record=Map.of(
-              "symbol", assetIdentifier,
-              "name", "Bitcoin US Dollar", "businessDate","2026-04-20T00:00:00Z",
+                "code", assetIdentifier,
+                "date", "2026-04-20",
                 "close", 87500.50,
                 "volume", 1520.0
         );

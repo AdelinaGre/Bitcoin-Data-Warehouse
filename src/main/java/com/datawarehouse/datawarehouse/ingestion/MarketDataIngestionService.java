@@ -18,7 +18,7 @@ public class MarketDataIngestionService {
     private final MarketDataLoader loader;
 
     public IngestionResult ingest(String assetIdentifier) {
-        IngestionResult totalResult = new IngestionResult(0, 0, 0, 0, 0);
+        IngestionResult totalResult = new IngestionResult(0, 0, 0, 0, 0, "Ingestion started");
 
         RawMarketDataPage currentPage = extractor.fetchFirstPage(assetIdentifier);
 
@@ -46,6 +46,7 @@ public class MarketDataIngestionService {
             currentPage = extractor.fetchNextPage(assetIdentifier, currentPage.getNextCursor());
         }
 
+        totalResult.setMessage("Ingestion completed");
         return totalResult;
     }
 }

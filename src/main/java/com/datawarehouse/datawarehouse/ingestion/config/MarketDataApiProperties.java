@@ -1,4 +1,4 @@
-package com.datawarehouse.datawarehouse.config;
+package com.datawarehouse.datawarehouse.ingestion.config;
 
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -8,5 +8,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class MarketDataApiProperties {
     private String baseUrl;
     private String key;
-    private String dataset;
+    private String databaseCode;
+    private String tableCode;
+    private String code;
 }

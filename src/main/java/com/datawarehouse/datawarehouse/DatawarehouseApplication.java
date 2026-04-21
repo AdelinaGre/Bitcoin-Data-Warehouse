@@ -1,6 +1,6 @@
 package com.datawarehouse.datawarehouse;
 
-import com.datawarehouse.datawarehouse.config.MarketDataApiProperties;
+import com.datawarehouse.datawarehouse.ingestion.config.MarketDataApiProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;

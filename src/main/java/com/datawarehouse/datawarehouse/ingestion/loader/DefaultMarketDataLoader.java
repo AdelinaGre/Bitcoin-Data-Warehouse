@@ -2,6 +2,7 @@ package com.datawarehouse.datawarehouse.ingestion.loader;
 
 import com.datawarehouse.datawarehouse.dal.partitionKey.AssetKey;
 import com.datawarehouse.datawarehouse.dal.partitionKey.DataSourceKey;
+import com.datawarehouse.datawarehouse.dal.partitionKey.TimeSeriesPartitionKey;
 import com.datawarehouse.datawarehouse.dal.repository.AssetRepository;
 import com.datawarehouse.datawarehouse.dal.repository.DataSourceRepository;
 import com.datawarehouse.datawarehouse.dal.repository.TimeSeriesDataRepository;
@@ -13,7 +14,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 @RequiredArgsConstructor
-public class StubMarketDataLoader implements MarketDataLoader{
+public class DefaultMarketDataLoader implements MarketDataLoader{
     private final AssetRepository assetRepository;
     private final DataSourceRepository dataSourceRepository;
     private final TimeSeriesDataRepository timeSeriesDataRepository;
@@ -40,8 +41,26 @@ public class StubMarketDataLoader implements MarketDataLoader{
             }
 
             for (TimeSeriesData record : canonicalMarketData.getTimeSeriesRecords()) {
-                timeSeriesDataRepository.save(record);
-                stored++;
+                boolean exists=false;
+                Iterable<TimeSeriesData> existingRecords = timeSeriesDataRepository.findByBusinessDate(
+                        new TimeSeriesPartitionKey(
+                                record.getAssetId(),
+                                record.getDataSourceId(),
+                                record.getBusinessYear()
+                        ),
+                        record.getBusinessDate()
+                );
+                for (TimeSeriesData ignored : existingRecords) {
+                    exists = true;
+                    break;
+                }
+
+                if (!exists) { //checks if time-series row already exists for that business date
+                    timeSeriesDataRepository.save(record);
+                    stored++;
+                } else {
+                    skipped++;
+                }
             }
         }catch(Exception e){
             failed++;
@@ -53,7 +72,8 @@ public class StubMarketDataLoader implements MarketDataLoader{
                 canonicalMarketData.getTimeSeriesRecords().size(),
                 stored,
                 skipped,
-                failed
+                failed,
+                "Load completed"
         );
     }
 }
