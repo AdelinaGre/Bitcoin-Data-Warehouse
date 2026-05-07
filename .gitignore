@@ -1,4 +1,7 @@
 HELP.md
+.codex_tmp/
+.gradle-local/
+.venv/
 .gradle
 build/
 !gradle/wrapper/gradle-wrapper.jar
@@ -35,6 +38,22 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### Frontend ###
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+### Python / Spark local runtime ###
+spark_analysis_ml/.venv/
+spark_analysis_ml/__pycache__/
+spark_analysis_ml/spark-warehouse/
+__pycache__/
+*.pyc
+
+### Logs / local env ###
+*.log
+.env
 
 ## files api  key
 src/main/resources/application-local.properties

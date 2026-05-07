@@ -10,6 +10,13 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: password
     volumes:
       - mongo-data:/data/db
+    
+  kafka:
+    image: apache/kafka:3.7.2
+    container_name: kafka_container
+    ports:
+      - "9092:9092"
+
 
 volumes:
   mongo-data:

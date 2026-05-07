@@ -17,14 +17,13 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 
-
 import static org.junit.jupiter.api.Assertions.*;
-@TestPropertySource(properties = {
-        "marketdata.extractor.mode=stub"
-})
 
 @Import(TestcontainersConfiguration.class)
 @SpringBootTest
+@TestPropertySource(properties = {
+        "marketdata.extractor.mode=stub"
+})
 class IngestionFlowIntegrationTest {
 
     @Autowired
@@ -49,26 +48,23 @@ class IngestionFlowIntegrationTest {
         assertEquals(3, result.getStoredRecords());
         assertEquals(0, result.getFailedRecords());
 
-        Asset asset = assetRepository.findLatest(new AssetKey("BTCUSD"));
-        assertNotNull(asset);
-        assertEquals("BTCUSD", asset.getId());
+        String expectedDataSourceId = "stub-btc-dataset";
+        String expectedAssetId = "stub-btc-dataset/BTCUSD";
 
-        DataSource dataSource = dataSourceRepository.findLatest(new DataSourceKey("StubProvider-stub-btc-dataset"));
+        Asset asset = assetRepository.findLatest(new AssetKey(expectedAssetId));
+        assertNotNull(asset);
+        assertEquals(expectedAssetId, asset.getId());
+
+        DataSource dataSource = dataSourceRepository.findLatest(new DataSourceKey(expectedDataSourceId));
         assertNotNull(dataSource);
-        assertEquals("StubProvider", dataSource.getProvider());
+        assertEquals(expectedDataSourceId, dataSource.getId());
 
         TimeSeriesData timeSeriesData = timeSeriesDataRepository.findLatest(
-                new TimeSeriesPartitionKey("BTCUSD", "StubProvider-stub-btc-dataset", 2026)
+                new TimeSeriesPartitionKey(expectedAssetId, expectedDataSourceId, 2026)
         );
         assertNotNull(timeSeriesData);
-        assertEquals("BTCUSD", timeSeriesData.getAssetId());
+        assertEquals(expectedAssetId, timeSeriesData.getAssetId());
         assertFalse(timeSeriesData.isDeleted());
         assertTrue(timeSeriesData.getPayload().containsKey("close"));
-
-        System.out.println("=== Ingestion Demo Output ===");
-        System.out.println("Ingestion result: " + result);
-        System.out.println("Stored asset: " + asset);
-        System.out.println("Stored data source: " + dataSource);
-        System.out.println("Stored time series record: " + timeSeriesData);
     }
 }

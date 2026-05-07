@@ -35,9 +35,6 @@ class RealIngestionFlowIntegrationTest {
         assertTrue(result.getSkippedRecords() >= 0);
         assertEquals(0, result.getFailedRecords());
 
-        assertNotNull(assetRepository.findLatest(new AssetKey("ZRXUSD")));
-
-        System.out.println("=== Real Ingestion Output ===");
-        System.out.println(result);
+        assertNotNull(assetRepository.findLatest(new AssetKey("QDL/BITFINEX/ZRXUSD")));
     }
 }

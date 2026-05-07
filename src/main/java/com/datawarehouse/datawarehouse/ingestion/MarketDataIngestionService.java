@@ -9,15 +9,22 @@ import com.datawarehouse.datawarehouse.ingestion.transformer.MarketDataTransform
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 @Service
 @RequiredArgsConstructor
 public class MarketDataIngestionService {
 
-    private final MarketDataExtractor extractor;
+    private final List<MarketDataExtractor> extractors;
     private final MarketDataTransformer transformer;
     private final MarketDataLoader loader;
 
     public IngestionResult ingest(String assetIdentifier) {
+        return ingest("nasdaq", assetIdentifier);
+    }
+
+    public IngestionResult ingest(String provider, String assetIdentifier) {
+        MarketDataExtractor extractor = findExtractor(provider);
         IngestionResult totalResult = new IngestionResult(0, 0, 0, 0, 0, "Ingestion started");
 
         RawMarketDataPage currentPage = extractor.fetchFirstPage(assetIdentifier);
@@ -48,5 +55,12 @@ public class MarketDataIngestionService {
 
         totalResult.setMessage("Ingestion completed");
         return totalResult;
+    }
+
+    private MarketDataExtractor findExtractor(String provider) {
+        return extractors.stream()
+                .filter(extractor -> extractor.providerId().equalsIgnoreCase(provider))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Unknown market data provider: " + provider));
     }
 }

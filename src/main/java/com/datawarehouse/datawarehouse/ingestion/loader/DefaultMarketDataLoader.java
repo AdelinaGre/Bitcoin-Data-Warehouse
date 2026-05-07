@@ -6,15 +6,20 @@ import com.datawarehouse.datawarehouse.dal.partitionKey.TimeSeriesPartitionKey;
 import com.datawarehouse.datawarehouse.dal.repository.AssetRepository;
 import com.datawarehouse.datawarehouse.dal.repository.DataSourceRepository;
 import com.datawarehouse.datawarehouse.dal.repository.TimeSeriesDataRepository;
+import com.datawarehouse.datawarehouse.domain.Asset;
+import com.datawarehouse.datawarehouse.domain.DataSource;
 import com.datawarehouse.datawarehouse.domain.TimeSeriesData;
 import com.datawarehouse.datawarehouse.ingestion.model.CanonicalMarketData;
 import com.datawarehouse.datawarehouse.ingestion.model.IngestionResult;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
+import java.util.Objects;
+
 
 @Component
 @RequiredArgsConstructor
 public class DefaultMarketDataLoader implements MarketDataLoader{
+    // p/u salvare/verificare existentei unui Asset,DataSource sau TimeSeriesData
     private final AssetRepository assetRepository;
     private final DataSourceRepository dataSourceRepository;
     private final TimeSeriesDataRepository timeSeriesDataRepository;
@@ -22,18 +27,21 @@ public class DefaultMarketDataLoader implements MarketDataLoader{
 
     @Override
     public IngestionResult load(CanonicalMarketData canonicalMarketData) {
-        int stored=0;
+        int stored=0; // initializare statistica
         int skipped =0;
         int failed=0;
-
-        try{
-            if(assetRepository.findLatest(new AssetKey(canonicalMarketData.getAsset().getId()))==null){
+            // AssetKey, DatasourceKey sunt chei de cuatare/partitionare folosite ca sa identifice daca un obiect exista deja.
+        try{ // salveaza versiuni noi doar cand apar date noi sau metadata diferita
+            Asset latestAsset = assetRepository.findLatest(new AssetKey(canonicalMarketData.getAsset().getId()));
+            if (latestAsset == null || latestAsset.isDeleted() || !isSameAsset(latestAsset, canonicalMarketData.getAsset())) {
                 assetRepository.save(canonicalMarketData.getAsset());
                 stored++;
             }else{
                 skipped++;
             }
-            if (dataSourceRepository.findLatest(new DataSourceKey(canonicalMarketData.getDataSource().getId())) == null) {
+
+            DataSource latestDataSource = dataSourceRepository.findLatest(new DataSourceKey(canonicalMarketData.getDataSource().getId()));
+            if (latestDataSource == null || latestDataSource.isDeleted() || !isSameDataSource(latestDataSource, canonicalMarketData.getDataSource())) {
                 dataSourceRepository.save(canonicalMarketData.getDataSource());
                 stored++;
             } else {
@@ -41,26 +49,22 @@ public class DefaultMarketDataLoader implements MarketDataLoader{
             }
 
             for (TimeSeriesData record : canonicalMarketData.getTimeSeriesRecords()) {
-                boolean exists=false;
-                Iterable<TimeSeriesData> existingRecords = timeSeriesDataRepository.findByBusinessDate(
-                        new TimeSeriesPartitionKey(
-                                record.getAssetId(),
-                                record.getDataSourceId(),
-                                record.getBusinessYear()
-                        ),
-                        record.getBusinessDate()
+                TimeSeriesPartitionKey key = new TimeSeriesPartitionKey(
+                        record.getAssetId(),
+                        record.getDataSourceId(),
+                        record.getBusinessYear()
                 );
-                for (TimeSeriesData ignored : existingRecords) {
-                    exists = true;
-                    break;
+
+                TimeSeriesData latestExistingRecord =
+                        timeSeriesDataRepository.findLatestByBusinessDate(key, record.getBusinessDate());
+
+                if (latestExistingRecord != null && isSamePayload(latestExistingRecord, record)) {
+                    skipped++;
+                    continue;
                 }
 
-                if (!exists) { //checks if time-series row already exists for that business date
-                    timeSeriesDataRepository.save(record);
-                    stored++;
-                } else {
-                    skipped++;
-                }
+                timeSeriesDataRepository.save(record);
+                stored++;
             }
         }catch(Exception e){
             failed++;
@@ -76,4 +80,35 @@ public class DefaultMarketDataLoader implements MarketDataLoader{
                 "Load completed"
         );
     }
+
+    private boolean isSameAsset(Asset existing, Asset incoming) {
+        return Objects.equals(existing.getName(), incoming.getName())
+                && Objects.equals(existing.getDescription(), incoming.getDescription())
+                && Objects.equals(existing.getSymbol(), incoming.getSymbol())
+                && Objects.equals(existing.getAssetType(), incoming.getAssetType())
+                && Objects.equals(existing.getAttributes(), incoming.getAttributes());
+    }
+
+    private boolean isSameDataSource(DataSource existing, DataSource incoming) {
+        return Objects.equals(existing.getName(), incoming.getName())
+                && Objects.equals(existing.getDescription(), incoming.getDescription())
+                && Objects.equals(existing.getProvider(), incoming.getProvider())
+                && Objects.equals(existing.getDataset(), incoming.getDataset())
+                && Objects.equals(existing.getRequestContext(), incoming.getRequestContext())
+                && Objects.equals(existing.getAttributes(), incoming.getAttributes());
+    }
+
+    private boolean isSamePayload(TimeSeriesData existingRecord, TimeSeriesData incomingRecord) {
+        if (Objects.equals(existingRecord.getPayloadHash(), incomingRecord.getPayloadHash())) {
+            return true;
+        }
+
+        // Compatibil cu recordurile vechi din Mongo care nu au inca payloadHash.
+        if (existingRecord.getPayloadHash() == null) {
+            return Objects.equals(existingRecord.getPayload(), incomingRecord.getPayload());
+        }
+
+        return false;
+    }
+
 }
