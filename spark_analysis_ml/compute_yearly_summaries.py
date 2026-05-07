@@ -1,8 +1,17 @@
+import argparse
+import os
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import avg, coalesce, col, count, current_timestamp, lit, max, min
 
-MONGO_URI = "mongodb://admin:password@127.0.0.1:27017/datawarehouse?authSource=admin"
+MONGO_URI = os.getenv(
+    "MONGO_URI",
+    "mongodb://admin:password@127.0.0.1:27017/datawarehouse?authSource=admin",
+)
 
+parser = argparse.ArgumentParser(description="Compute yearly price summaries with Spark.")
+parser.add_argument("--asset-id", default="", help="Optional warehouse assetId filter.")
+args = parser.parse_args()
 
 spark = (
     SparkSession.builder
@@ -40,6 +49,9 @@ analytics_df = (
     .filter(col("businessYear").isNotNull())
     .filter(col("price").isNotNull())
 )
+
+if args.asset_id:
+    analytics_df = analytics_df.filter(col("assetId") == args.asset_id)
 
 summary_df = (
     analytics_df

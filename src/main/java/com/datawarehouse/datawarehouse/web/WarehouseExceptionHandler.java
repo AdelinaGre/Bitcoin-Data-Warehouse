@@ -29,6 +29,14 @@ public class WarehouseExceptionHandler {
         return buildResponse(HttpStatus.BAD_GATEWAY, ex.getMessage(), request);
     }
 
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ApiErrorResponse> handleServerStateFailure(
+            IllegalStateException ex,
+            HttpServletRequest request
+    ) {
+        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, ex.getMessage(), request);
+    }
+
     private ResponseEntity<ApiErrorResponse> buildResponse(
             HttpStatus status,
             String message,

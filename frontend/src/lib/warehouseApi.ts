@@ -5,6 +5,7 @@ import type {
   MarketDataProviderId,
   PricePrediction,
   SparkJobStatus,
+  StreamingStatus,
   TimeSeriesPoint,
   YearlySummary,
 } from "@/types/warehouse";
@@ -114,6 +115,27 @@ export async function ingestAsset(
   );
 }
 
+export async function loadBinanceStreamingStatus(): Promise<StreamingStatus | null> {
+  try {
+    return fetchJson<StreamingStatus>(`${API_BASE}/streaming/binance/status`);
+  } catch (error) {
+    console.error("Could not load Binance streaming status", error);
+    return null;
+  }
+}
+
+export async function startBinanceStreaming(): Promise<StreamingStatus> {
+  return fetchJson<StreamingStatus>(`${API_BASE}/streaming/binance/start`, {
+    method: "POST",
+  });
+}
+
+export async function stopBinanceStreaming(): Promise<StreamingStatus> {
+  return fetchJson<StreamingStatus>(`${API_BASE}/streaming/binance/stop`, {
+    method: "POST",
+  });
+}
+
 export async function loadTimeSeries(
   assetId: string,
   dataSourceId: string,
@@ -160,6 +182,25 @@ export async function loadSparkJobs(): Promise<SparkJobStatus[]> {
   }
 }
 
+export async function runYearlySummaries(assetId?: string): Promise<SparkJobStatus> {
+  return fetchJson<SparkJobStatus>(`${API_BASE}/analytics/run/yearly-summaries${assetQuery(assetId)}`, {
+    method: "POST",
+  });
+}
+
+export async function runPriceRegression(assetId?: string): Promise<SparkJobStatus> {
+  return fetchJson<SparkJobStatus>(`${API_BASE}/analytics/run/price-regression${assetQuery(assetId)}`, {
+    method: "POST",
+  });
+}
+
+export async function runAllAnalytics(assetId?: string): Promise<SparkJobStatus[]> {
+  const response = await fetchJson<ListResponse<SparkJobStatus>>(`${API_BASE}/analytics/run/all${assetQuery(assetId)}`, {
+    method: "POST",
+  });
+  return unwrapList(response);
+}
+
 export async function loadYearlySummaries(): Promise<YearlySummary[]> {
   try {
     const response = await fetchJson<ListResponse<YearlySummary>>(`${API_BASE}/analytics/yearly-summaries`);
@@ -199,6 +240,14 @@ async function loadAllIds(endpoint: string) {
   }
 
   return ids;
+}
+
+function assetQuery(assetId?: string) {
+  if (!assetId) {
+    return "";
+  }
+  const params = new URLSearchParams({ assetId });
+  return `?${params.toString()}`;
 }
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {

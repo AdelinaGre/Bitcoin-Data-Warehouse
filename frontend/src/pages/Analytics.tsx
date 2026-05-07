@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Play, RefreshCw } from "lucide-react";
 import {
   Bar,
   BarChart,
@@ -24,6 +25,9 @@ import {
   loadPricePredictions,
   loadSparkJobs,
   loadYearlySummaries,
+  runAllAnalytics,
+  runPriceRegression,
+  runYearlySummaries,
 } from "@/lib/warehouseApi";
 
 const TOOLTIP_STYLE = {
@@ -64,6 +68,9 @@ export default function Analytics() {
   const [selectedYear, setSelectedYear] = useState<number | null>(null);
   const [selectedAsset, setSelectedAsset] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [runningJob, setRunningJob] = useState<"" | "summary" | "prediction" | "all">("");
+  const [analyticsError, setAnalyticsError] = useState("");
+  const [analyticsMessage, setAnalyticsMessage] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -107,25 +114,60 @@ export default function Analytics() {
   );
 
   const assetOptions = useMemo(() => {
-    const ids = new Set<string>();
+    const options = new Map<string, { symbol: string; assetId: string; label: string }>();
+
+    for (const instrument of instruments) {
+      const symbol = instrument.symbol || lastSegment(instrument.id);
+      options.set(symbol, {
+        symbol,
+        assetId: instrument.id,
+        label: `${symbol} - ${instrument.dataSource || instrument.class}`,
+      });
+    }
+
     for (const summary of summaries) {
-      ids.add(summary.assetSymbol || lastSegment(summary.assetId));
+      const symbol = summary.assetSymbol || lastSegment(summary.assetId);
+      if (!options.has(symbol)) {
+        options.set(symbol, {
+          symbol,
+          assetId: summary.assetId,
+          label: `${symbol} - ${lastSegment(summary.dataSourceId)}`,
+        });
+      }
     }
+
     for (const prediction of predictions) {
-      ids.add(prediction.assetSymbol || lastSegment(prediction.assetId));
+      const symbol = prediction.assetSymbol || lastSegment(prediction.assetId);
+      if (!options.has(symbol)) {
+        options.set(symbol, {
+          symbol,
+          assetId: prediction.assetId,
+          label: `${symbol} - ${prediction.dataSourceId ? lastSegment(prediction.dataSourceId) : "analytics"}`,
+        });
+      }
     }
-    return [...ids].filter(Boolean).sort();
-  }, [predictions, summaries]);
+
+    return [...options.values()].sort((a, b) => a.symbol.localeCompare(b.symbol));
+  }, [instruments, predictions, summaries]);
 
   useEffect(() => {
     if (!selectedAsset && assetOptions.length) {
-      setSelectedAsset(assetOptions[0]);
+      setSelectedAsset(assetOptions[0].symbol);
     }
   }, [assetOptions, selectedAsset]);
 
+  const selectedAssetId = useMemo(
+    () => assetOptions.find((asset) => asset.symbol === selectedAsset)?.assetId ?? "",
+    [assetOptions, selectedAsset],
+  );
+
   const filteredSummaries = useMemo(
-    () => summaries.filter((summary) => selectedYear === null || summary.businessYear === selectedYear),
-    [selectedYear, summaries],
+    () => summaries.filter((summary) => {
+      const symbol = summary.assetSymbol || lastSegment(summary.assetId);
+      return (selectedYear === null || summary.businessYear === selectedYear)
+        && (!selectedAsset || symbol === selectedAsset);
+    }),
+    [selectedAsset, selectedYear, summaries],
   );
 
   const assetSummary = useMemo(
@@ -151,6 +193,58 @@ export default function Analytics() {
     { label: "Warehouse Assets", value: instruments.length, hint: `${sources.length} data sources` },
   ];
 
+  async function refreshAnalyticsData() {
+    const [
+      nextJobs,
+      nextSummaries,
+      nextPredictions,
+      nextInstruments,
+      nextSources,
+    ] = await Promise.all([
+      loadSparkJobs(),
+      loadYearlySummaries(),
+      loadPricePredictions(),
+      loadInstruments(),
+      loadDataSources(),
+    ]);
+
+    setJobs(nextJobs);
+    setSummaries(sortSummaries(nextSummaries));
+    setPredictions(sortPredictions(nextPredictions));
+    setInstruments(nextInstruments);
+    setSources(nextSources);
+  }
+
+  async function handleRunAnalytics(job: "summary" | "prediction" | "all") {
+    if (!selectedAssetId) {
+      setAnalyticsError("Select an instrument first.");
+      return;
+    }
+
+    setAnalyticsError("");
+    setAnalyticsMessage("");
+    setRunningJob(job);
+
+    try {
+      if (job === "summary") {
+        await runYearlySummaries(selectedAssetId);
+        setAnalyticsMessage(`Yearly summary completed for ${selectedAsset}.`);
+      } else if (job === "prediction") {
+        await runPriceRegression(selectedAssetId);
+        setAnalyticsMessage(`Price prediction completed for ${selectedAsset}.`);
+      } else {
+        await runAllAnalytics(selectedAssetId);
+        setAnalyticsMessage(`Spark analytics completed for ${selectedAsset}.`);
+      }
+
+      await refreshAnalyticsData();
+    } catch (error) {
+      setAnalyticsError(error instanceof Error ? error.message : "Spark analytics job failed.");
+    } finally {
+      setRunningJob("");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -170,6 +264,61 @@ export default function Analytics() {
             <p className="mt-1 truncate text-xs text-muted-foreground">{metric.hint}</p>
           </div>
         ))}
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-card-foreground">Analysis Runner</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Select an instrument and run Spark aggregation or ML regression.
+            </p>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <select
+              value={selectedAsset}
+              onChange={(event) => setSelectedAsset(event.target.value)}
+              disabled={!assetOptions.length || Boolean(runningJob)}
+              className="min-w-[220px] rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground disabled:opacity-60"
+            >
+              {!assetOptions.length && <option value="">No instruments</option>}
+              {assetOptions.map((asset) => (
+                <option key={asset.assetId} value={asset.symbol}>
+                  {asset.label}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => handleRunAnalytics("summary")}
+              disabled={!selectedAssetId || Boolean(runningJob)}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+            >
+              {runningJob === "summary" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              Yearly Summary
+            </button>
+            <button
+              onClick={() => handleRunAnalytics("prediction")}
+              disabled={!selectedAssetId || Boolean(runningJob)}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-muted px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted/70 disabled:opacity-60"
+            >
+              {runningJob === "prediction" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              Price Prediction
+            </button>
+            <button
+              onClick={() => handleRunAnalytics("all")}
+              disabled={!selectedAssetId || Boolean(runningJob)}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-4 py-2 text-sm font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-60"
+            >
+              {runningJob === "all" ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              Run All
+            </button>
+          </div>
+        </div>
+        {(analyticsMessage || analyticsError) && (
+          <p className={`mt-3 text-xs ${analyticsError ? "text-destructive" : "text-emerald-400"}`}>
+            {analyticsError || analyticsMessage}
+          </p>
+        )}
       </div>
 
       <div className="rounded-xl border border-border bg-card p-5">
@@ -331,8 +480,8 @@ export default function Analytics() {
             >
               {!assetOptions.length && <option value="">No assets</option>}
               {assetOptions.map((asset) => (
-                <option key={asset} value={asset}>
-                  {asset}
+                <option key={asset.assetId} value={asset.symbol}>
+                  {asset.symbol}
                 </option>
               ))}
             </select>
@@ -390,7 +539,9 @@ export default function Analytics() {
             { method: "GET", path: "/api/v1/analytics/jobs", desc: "Returns Spark job metadata and output collections." },
             { method: "GET", path: "/api/v1/analytics/yearly-summaries", desc: "Returns aggregation results from analytics_yearly_summaries." },
             { method: "GET", path: "/api/v1/analytics/predictions", desc: "Returns ML prediction rows from analytics_price_predictions." },
-            { method: "POST", path: "/api/v1/analytics/run", desc: "Triggers aggregation or ML regression jobs when backend support exists." },
+            { method: "POST", path: "/api/v1/analytics/run/yearly-summaries", desc: "Runs the Spark aggregation job for the selected asset." },
+            { method: "POST", path: "/api/v1/analytics/run/price-regression", desc: "Runs the Spark ML regression job for the selected asset." },
+            { method: "POST", path: "/api/v1/analytics/run/all", desc: "Runs aggregation and ML regression for the selected asset." },
           ].map((endpoint) => (
             <div key={endpoint.path} className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-3 py-2">
               <span className={`rounded px-2 py-0.5 font-mono text-xs font-bold ${endpoint.method === "GET" ? "bg-emerald-500/15 text-emerald-400" : "bg-primary/15 text-primary"}`}>

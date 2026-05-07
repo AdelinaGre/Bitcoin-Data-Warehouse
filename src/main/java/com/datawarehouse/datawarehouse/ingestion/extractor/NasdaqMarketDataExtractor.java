@@ -1,10 +1,13 @@
 package com.datawarehouse.datawarehouse.ingestion.extractor;
 
 import com.datawarehouse.datawarehouse.ingestion.config.MarketDataApiProperties;
+import com.datawarehouse.datawarehouse.ingestion.MarketDataProviderException;
 import com.datawarehouse.datawarehouse.ingestion.model.RawMarketDataPage;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
@@ -26,53 +29,64 @@ public class NasdaqMarketDataExtractor implements MarketDataExtractor {
 
     @Override
     public RawMarketDataPage fetchFirstPage(String assetIdentifier) {
-        JsonNode response = restClient.get()
-                .uri(uriBuilder -> {
-                    var builder = uriBuilder // se construieste un URL
-                            .scheme("https")
-                            .host("data.nasdaq.com")
-                            .path("/api/v3/datatables/{databaseCode}/{tableCode}.json")
-                            .queryParam("code", assetIdentifier);
-                        // si daca exista adauga api_key
-                    if (properties.getKey() != null && !properties.getKey().isBlank()) {
-                        builder.queryParam("api_key", properties.getKey());
-                    }
+        ensureApiKey();
 
-                    return builder.build(
-                            properties.getDatabaseCode(),
-                            properties.getTableCode()
-                    );
-                })
+        JsonNode response = executeNasdaqRequest(() -> restClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .scheme("https")
+                        .host("data.nasdaq.com")
+                        .path("/api/v3/datatables/{databaseCode}/{tableCode}.json")
+                        .queryParam("code", assetIdentifier)
+                        .queryParam("api_key", properties.getKey())
+                        .build(properties.getDatabaseCode(), properties.getTableCode()))
                 .retrieve()
-                .body(JsonNode.class);
+                .body(JsonNode.class));
 
         return toRawPage(response);
     }
 
     @Override
     public RawMarketDataPage fetchNextPage(String assetIdentifier, String nextCursor) {
-        JsonNode response = restClient.get()
-                .uri(uriBuilder -> {
-                    var builder = uriBuilder
-                            .scheme("https")
-                            .host("data.nasdaq.com")
-                            .path("/api/v3/datatables/{databaseCode}/{tableCode}.json")
-                            .queryParam("code", assetIdentifier)
-                            .queryParam("qopts.cursor_id", nextCursor);
+        ensureApiKey();
 
-                    if (properties.getKey() != null && !properties.getKey().isBlank()) {
-                        builder.queryParam("api_key", properties.getKey());
-                    }
-
-                    return builder.build(
-                            properties.getDatabaseCode(),
-                            properties.getTableCode()
-                    );
-                })
+        JsonNode response = executeNasdaqRequest(() -> restClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .scheme("https")
+                        .host("data.nasdaq.com")
+                        .path("/api/v3/datatables/{databaseCode}/{tableCode}.json")
+                        .queryParam("code", assetIdentifier)
+                        .queryParam("qopts.cursor_id", nextCursor)
+                        .queryParam("api_key", properties.getKey())
+                        .build(properties.getDatabaseCode(), properties.getTableCode()))
                 .retrieve()
-                .body(JsonNode.class); // primeste raspuns json
+                .body(JsonNode.class)); // primeste raspuns json
 
         return toRawPage(response); // si apoi il transforma in RawMarketDataPage
+    }
+
+    private void ensureApiKey() {
+        if (properties.getKey() == null || properties.getKey().isBlank()) {
+            throw new MarketDataProviderException(
+                    "Nasdaq Data Link API key is missing in the running Spring Boot process. "
+                            + "Set NASDAQ_DATA_LINK_API_KEY before starting bootRun."
+            );
+        }
+    }
+
+    private JsonNode executeNasdaqRequest(NasdaqRequest request) {
+        try {
+            return request.execute();
+        } catch (RestClientResponseException ex) {
+            if (ex.getStatusCode().is4xxClientError()) {
+                throw new MarketDataProviderException(
+                        "Nasdaq Data Link rejected the request. Check NASDAQ_DATA_LINK_API_KEY and the requested asset code.",
+                        ex
+                );
+            }
+            throw new MarketDataProviderException("Nasdaq Data Link request failed: " + ex.getMessage(), ex);
+        } catch (RestClientException ex) {
+            throw new MarketDataProviderException("Nasdaq Data Link request failed: " + ex.getMessage(), ex);
+        }
     }
 
     private RawMarketDataPage toRawPage(JsonNode response) {
@@ -128,5 +142,10 @@ public class NasdaqMarketDataExtractor implements MarketDataExtractor {
             return node.textValue();
         }
         return node.toString();
+    }
+
+    @FunctionalInterface
+    private interface NasdaqRequest {
+        JsonNode execute();
     }
 }

@@ -1,13 +1,21 @@
 import { useEffect, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { Play, Radio, RefreshCw, Square } from "lucide-react";
 import EmptyState from "@/components/EmptyState";
 import type {
   DataSource,
   FinancialInstrument,
   IngestionResult,
   MarketDataProviderId,
+  StreamingStatus,
 } from "@/types/warehouse";
-import { ingestAsset, loadDataSources, loadInstruments } from "@/lib/warehouseApi";
+import {
+  ingestAsset,
+  loadBinanceStreamingStatus,
+  loadDataSources,
+  loadInstruments,
+  startBinanceStreaming,
+  stopBinanceStreaming,
+} from "@/lib/warehouseApi";
 
 type Job = {
   provider: MarketDataProviderId;
@@ -46,9 +54,13 @@ export default function Ingestion() {
   const [provider, setProvider] = useState<MarketDataProviderId>("nasdaq");
   const [assetCode, setAssetCode] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isStreamingAction, setIsStreamingAction] = useState(false);
   const [error, setError] = useState("");
+  const [streamingError, setStreamingError] = useState("");
+  const [streamingStatus, setStreamingStatus] = useState<StreamingStatus | null>(null);
   const [jobs, setJobs] = useState<Job[]>(() => loadStoredJobs());
   const selectedProvider = PROVIDERS.find((item) => item.id === provider) ?? PROVIDERS[0];
+  const streamIsRunning = Boolean(streamingStatus?.running || streamingStatus?.status === "RUNNING");
 
   async function refreshWarehouseState() {
     const [nextSources, nextInstruments] = await Promise.all([
@@ -64,14 +76,16 @@ export default function Ingestion() {
     let cancelled = false;
 
     async function load() {
-      const [nextSources, nextInstruments] = await Promise.all([
+      const [nextSources, nextInstruments, nextStreamingStatus] = await Promise.all([
         loadDataSources(),
         loadInstruments(),
+        loadBinanceStreamingStatus(),
       ]);
 
       if (!cancelled) {
         setDataSources(nextSources);
         setInstruments(nextInstruments);
+        setStreamingStatus(nextStreamingStatus);
       }
     }
 
@@ -81,6 +95,18 @@ export default function Ingestion() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!streamIsRunning) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      refreshStreamingStatus();
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [streamIsRunning]);
 
   useEffect(() => {
     storeJobs(jobs);
@@ -119,6 +145,44 @@ export default function Ingestion() {
       setError(err instanceof Error ? err.message : "Ingestion failed.");
     } finally {
       setIsSyncing(false);
+    }
+  }
+
+  async function refreshStreamingStatus() {
+    const nextStatus = await loadBinanceStreamingStatus();
+    setStreamingStatus(nextStatus);
+  }
+
+  async function handleStartStreaming() {
+    setStreamingError("");
+    setIsStreamingAction(true);
+
+    try {
+      const result = await startBinanceStreaming();
+      setStreamingStatus(result);
+      window.setTimeout(() => {
+        refreshStreamingStatus();
+        refreshWarehouseState();
+      }, 1500);
+    } catch (err) {
+      setStreamingError(err instanceof Error ? err.message : "Could not start Binance streaming.");
+    } finally {
+      setIsStreamingAction(false);
+    }
+  }
+
+  async function handleStopStreaming() {
+    setStreamingError("");
+    setIsStreamingAction(true);
+
+    try {
+      const result = await stopBinanceStreaming();
+      setStreamingStatus(result);
+      await refreshWarehouseState();
+    } catch (err) {
+      setStreamingError(err instanceof Error ? err.message : "Could not stop Binance streaming.");
+    } finally {
+      setIsStreamingAction(false);
     }
   }
 
@@ -162,6 +226,87 @@ export default function Ingestion() {
           </button>
         </div>
         {error && <p className="mt-3 text-xs text-chart-down">{error}</p>}
+      </div>
+
+      <div className="rounded-xl border border-border bg-card p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 rounded-lg border border-border bg-background p-2 text-primary">
+              <Radio className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-semibold text-card-foreground">Binance Streaming</h2>
+                <span
+                  className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                    streamIsRunning
+                      ? "bg-chart-up/15 text-chart-up"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {streamIsRunning ? "RUNNING" : "STOPPED"}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                BTCUSDT and ETHUSDT kline events are streamed through Kafka into MongoDB.
+              </p>
+              <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+                <span>
+                  Last message:{" "}
+                  <strong className="font-mono text-card-foreground">
+                    {formatDateTime(streamingStatus?.lastMessageAt)}
+                  </strong>
+                </span>
+                <span>
+                  Started:{" "}
+                  <strong className="font-mono text-card-foreground">
+                    {formatDateTime(streamingStatus?.startedAt)}
+                  </strong>
+                </span>
+                <span>
+                  Checked:{" "}
+                  <strong className="font-mono text-card-foreground">
+                    {formatDateTime(streamingStatus?.checkedAt)}
+                  </strong>
+                </span>
+              </div>
+              {streamingStatus?.lastError && (
+                <p className="mt-2 text-xs text-chart-down">{streamingStatus.lastError}</p>
+              )}
+              {streamingError && <p className="mt-2 text-xs text-chart-down">{streamingError}</p>}
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={handleStartStreaming}
+              disabled={isStreamingAction || streamIsRunning}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
+            >
+              <Play className="h-4 w-4" />
+              Start Stream
+            </button>
+            <button
+              onClick={handleStopStreaming}
+              disabled={isStreamingAction || !streamIsRunning}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-card-foreground transition-colors hover:bg-muted disabled:opacity-60"
+            >
+              <Square className="h-4 w-4" />
+              Stop
+            </button>
+            <button
+              onClick={() => {
+                refreshStreamingStatus();
+                refreshWarehouseState();
+              }}
+              disabled={isStreamingAction}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-medium text-card-foreground transition-colors hover:bg-muted disabled:opacity-60"
+            >
+              <RefreshCw className={`h-4 w-4 ${isStreamingAction ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -323,4 +468,17 @@ function isProvider(value: unknown): value is MarketDataProviderId {
 
 function formatProvider(value: MarketDataProviderId) {
   return PROVIDERS.find((item) => item.id === value)?.label ?? value;
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) {
+    return "-";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+
+  return date.toLocaleString();
 }

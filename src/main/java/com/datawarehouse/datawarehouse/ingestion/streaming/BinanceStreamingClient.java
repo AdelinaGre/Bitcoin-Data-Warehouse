@@ -15,10 +15,14 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
@@ -30,6 +34,7 @@ public class BinanceStreamingClient {
     private static final String PROVIDER = "Binance";
     private static final String DATA_SOURCE_ID = "BINANCE/SPOT";
     private static final String EVENT_TYPE = "kline";
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(15);
 
     private final ObjectMapper objectMapper;
     private final KafkaRawMarketDataProducer rawMarketDataProducer;
@@ -52,28 +57,34 @@ public class BinanceStreamingClient {
             return;
         }
 
-        try {
-            URI uri = URI.create(buildStreamUrl());
-            StandardWebSocketClient client = new StandardWebSocketClient();
-            lastError = null;
-            lastCloseStatus = null;
-            log.info("Starting Binance WebSocket stream: {}", uri);
+        lastError = null;
+        lastCloseStatus = null;
 
-            this.session = client.execute(
-                    new BinanceWebSocketHandler(),
-                    new WebSocketHttpHeaders(),
-                    uri
-            ).get();
+        Exception lastException = null;
+        for (URI uri : buildStreamUrls()) {
+            try {
+                log.info("Starting Binance WebSocket stream: {}", uri);
+                this.session = connect(uri);
 
-            running.set(true);
-            startedAt = Instant.now();
-            log.info("Binance WebSocket stream started. Session open: {}", session.isOpen());
-        } catch (Exception exception) {
-            running.set(false);
-            lastError = exception.getMessage();
-            log.error("Failed to start Binance streaming client", exception);
-            throw new IllegalStateException("Failed to start Binance streaming client", exception);
+                running.set(true);
+                startedAt = Instant.now();
+                lastError = null;
+                log.info("Binance WebSocket stream started. Session open: {}", session.isOpen());
+                return;
+            } catch (Exception exception) {
+                running.set(false);
+                session = null;
+                lastException = exception;
+                lastError = describe(exception);
+                log.warn("Could not connect to Binance WebSocket endpoint {}: {}", uri, lastError);
+            }
         }
+
+        log.error("Failed to start Binance streaming client", lastException);
+        throw new IllegalStateException(
+                "Failed to start Binance streaming client: " + lastError,
+                lastException
+        );
     }
 
     public synchronized void stop() {
@@ -114,7 +125,28 @@ public class BinanceStreamingClient {
         stop();
     }
 
-    private String buildStreamUrl() {
+    private WebSocketSession connect(URI uri) throws Exception {
+        StandardWebSocketClient client = new StandardWebSocketClient();
+        client.getUserProperties().put(
+                "org.apache.tomcat.websocket.IO_TIMEOUT_MS",
+                String.valueOf(CONNECT_TIMEOUT.toMillis())
+        );
+
+        CompletableFuture<WebSocketSession> connection = client.execute(
+                new BinanceWebSocketHandler(),
+                new WebSocketHttpHeaders(),
+                uri
+        );
+
+        try {
+            return connection.get(CONNECT_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+        } catch (Exception exception) {
+            connection.cancel(true);
+            throw exception;
+        }
+    }
+
+    private List<URI> buildStreamUrls() {
         String streams = Arrays.stream(symbols.split(","))
                 .map(String::trim)
                 .filter(symbol -> !symbol.isBlank())
@@ -122,12 +154,17 @@ public class BinanceStreamingClient {
                 .map(symbol -> symbol + "@kline_" + interval)
                 .collect(Collectors.joining("/"));
 
-        return "wss://stream.binance.com:9443/stream?streams=" + streams;
+        return List.of(
+                URI.create("wss://stream.binance.com:9443/stream?streams=" + streams),
+                URI.create("wss://stream.binance.com:443/stream?streams=" + streams),
+                URI.create("wss://data-stream.binance.vision/stream?streams=" + streams)
+        );
     }
 
     private void handleMessage(String payload) {
         try {
             lastMessageAt = Instant.now();
+            lastError = null;
             JsonNode root = objectMapper.readTree(payload);
             JsonNode kline = root.path("data").path("k");
 
@@ -160,10 +197,23 @@ public class BinanceStreamingClient {
             rawMarketDataProducer.publish(event);
             log.info("Published Binance {} event for {} at {}", EVENT_TYPE, symbol, eventTime);
         } catch (Exception exception) {
-            lastError = exception.getMessage();
+            lastError = describe(exception);
             log.error("Failed to handle Binance WebSocket message", exception);
-            throw new IllegalStateException("Failed to handle Binance WebSocket message", exception);
         }
+    }
+
+    private String describe(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null) {
+            current = current.getCause();
+        }
+
+        String message = current.getMessage();
+        if (message == null || message.isBlank()) {
+            return current.getClass().getSimpleName();
+        }
+
+        return current.getClass().getSimpleName() + ": " + message;
     }
 
     private class BinanceWebSocketHandler extends TextWebSocketHandler {
@@ -189,7 +239,7 @@ public class BinanceStreamingClient {
                 Throwable exception
         ) {
             running.set(false);
-            lastError = exception.getMessage();
+            lastError = describe(exception);
             log.error("Binance WebSocket transport error", exception);
             stop();
         }

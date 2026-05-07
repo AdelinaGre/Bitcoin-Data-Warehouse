@@ -39,6 +39,19 @@ export interface IngestionResult {
 
 export type MarketDataProviderId = "nasdaq" | "alphavantage";
 
+export interface StreamingStatus {
+  provider: string;
+  status: "RUNNING" | "STOPPED" | string;
+  running?: boolean;
+  message?: string;
+  checkedAt?: string;
+  startedAt?: string | null;
+  stoppedAt?: string | null;
+  lastMessageAt?: string | null;
+  lastCloseStatus?: string | null;
+  lastError?: string | null;
+}
+
 export interface YearlySummary {
   assetId: string;
   assetSymbol?: string;

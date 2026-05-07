@@ -3,13 +3,14 @@ package com.datawarehouse.datawarehouse.web;
 import com.datawarehouse.datawarehouse.ingestion.streaming.BinanceStreamingClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestController
@@ -20,16 +21,18 @@ public class StreamingController {
     private final BinanceStreamingClient binanceStreamingClient;
 
     @PostMapping("/start")
-    @ResponseStatus(HttpStatus.ACCEPTED)
-    public Map<String, Object> start() {
-        binanceStreamingClient.start();
-
-        return Map.of(
-                "provider", "Binance",
-                "status", "RUNNING",
-                "message", "Binance streaming client started",
-                "startedAt", Instant.now()
-        );
+    public ResponseEntity<Map<String, Object>> start() {
+        try {
+            binanceStreamingClient.start();
+            Map<String, Object> body = statusBody();
+            body.put("message", "Binance streaming client started");
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(body);
+        } catch (IllegalStateException exception) {
+            Map<String, Object> body = statusBody();
+            body.put("message", "Binance streaming client could not connect");
+            body.put("error", binanceStreamingClient.getLastError());
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(body);
+        }
     }
 
     @PostMapping("/stop")
@@ -46,18 +49,21 @@ public class StreamingController {
 
     @GetMapping("/status")
     public Map<String, Object> status() {
+        return statusBody();
+    }
+
+    private Map<String, Object> statusBody() {
         boolean running = binanceStreamingClient.isRunning();
 
-        return new java.util.LinkedHashMap<>(Map.of(
-                "provider", "Binance",
-                "status", running ? "RUNNING" : "STOPPED",
-                "running", running,
-                "checkedAt", Instant.now()
-        )) {{
-            put("startedAt", binanceStreamingClient.getStartedAt());
-            put("lastMessageAt", binanceStreamingClient.getLastMessageAt());
-            put("lastCloseStatus", binanceStreamingClient.getLastCloseStatus());
-            put("lastError", binanceStreamingClient.getLastError());
-        }};
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("provider", "Binance");
+        response.put("status", running ? "RUNNING" : "STOPPED");
+        response.put("running", running);
+        response.put("checkedAt", Instant.now());
+        response.put("startedAt", binanceStreamingClient.getStartedAt());
+        response.put("lastMessageAt", binanceStreamingClient.getLastMessageAt());
+        response.put("lastCloseStatus", binanceStreamingClient.getLastCloseStatus());
+        response.put("lastError", binanceStreamingClient.getLastError());
+        return response;
     }
 }
